@@ -3,6 +3,7 @@ const readline = require('readline-sync');
 const qrcode = require('qrcode-terminal');
 const { OpenAI } = require('openai');
 const axios = require('axios');
+const fs = require('fs');
 require('dotenv').config()
 
 // Env and config
@@ -10,10 +11,15 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_KEY
 });
 const localBaseUrl = process.env.LOCAL_ENDPOINT;
+const myNumber = process.env.MY_NUMBER;
+const group1 = process.env.GROUP1;
+
 const systemInstructions = "Responde en español";
 
 let selectedModel = null;
 let modelName = null;
+
+let debug = false;
 
 // Select operation mode and llm
 async function selectModel() {
@@ -60,7 +66,7 @@ const client = new Client({
 });
 
 // When the client is ready, run this code (only once)
-client.once('ready', () => {
+client.once('ready', async () => {
     console.log('Client is ready!');
 });
 
@@ -76,6 +82,7 @@ client.initialize();
 async function askOpenAi(prompt) {
     const response = await openai.responses.create({
         model: "gpt-5-mini-2025-08-07",
+        max_output_tokens: 4096,
         input: prompt
     });
     return "🤖:  " + response.output_text;
@@ -91,7 +98,7 @@ async function askLocal(prompt) {
                 { role: "user", content: prompt }
             ],
             temperature: 0.7,
-            max_tokens: 8192,
+            max_tokens: 4096,
             stream: false
         });
         return "🤖:  " + response.data.choices[0].message.content;
@@ -153,5 +160,52 @@ client.on('message_create', async message => {
                 message.reply('⏳ Espera 30 segundos antes de volver a preguntar. También puedes pagar en Ethereum para reducir el tiempo de espera.');
             }
         }
+    } else {
+        if (message.fromMe) return; // Dont' reply to myself, prevents infinite loop. Disable for private testing.
+
+        if (debug) {
+            console.log('-------', message.body);
+            console.log('message.broadcast: ', message.broadcast);
+            console.log('message.getChat(): ', await message.getChat());
+            console.log('message.from: ', message.from);
+            console.log('message.getMentions(): ', await message.getMentions());
+            console.log('message.mentionedIds: ', message.mentionedIds);
+            console.log('message.to: ', message.to);
+            console.log('message.getQuotedMessage(): ', await message.getQuotedMessage());
+            console.log('message', message);
+        }
+
+        if ((await message.getChat()).id.user == group1) { 
+            let respuesta = '🤖: Estoy ocupado 😈';
+
+            // Mention
+            let mentions = message.getMentions();
+            for (let i = 0; i < mentions.length; i++) {
+                if (mentions[i].isMe) {
+                    message.reply(respuesta);
+                }
+            }
+
+            // Reply
+            if (message.hasQuotedMsg) {
+                let quotedMessage = await message.getQuotedMessage();
+                if (quotedMessage.fromMe) {
+                    message.reply(respuesta);
+                }
+            }
+        }
+
+        //PRUEBAS CHAT PRIVADO
+        if ((await message.getChat()).id.user == myNumber) {
+            if (message.hasQuotedMsg) {
+                let quotedMessage = await message.getQuotedMessage();
+                if (quotedMessage.fromMe) {
+                    message.reply('🤖:  Estoy durmiendo zZZZZZzzZ');
+                }
+            }
+        }
+
     }
-});
+}
+)
+
