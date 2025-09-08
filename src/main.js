@@ -1,16 +1,19 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const readline = require('readline-sync');
 const qrcode = require('qrcode-terminal');
 const { OpenAI } = require('openai');
 const axios = require('axios');
-require('dotenv').config()
+const path = require('path');
+const fs = require('fs');
 
 // ===== Env and config =====
 
+require('dotenv').config()
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_KEY
 });
 const privateNumber = process.env.PRIVATE_NUMBER;
+const privateNumber2 = process.env.PRIVATE_NUMBER2;
 const localBaseUrl = process.env.LOCAL_ENDPOINT;
 const defaultMode = process.env.DEFAULT_MODE;
 const group1 = process.env.GROUP1;
@@ -28,10 +31,10 @@ let modelName = null;
 // Create a new client instance. With cache session management. Uncomment no-gui lines if needed
 const client = new Client({
     // no-gui
-    /* puppeteer: {
+    /*puppeteer: {
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
         executablePath: '/usr/bin/chromium',
-    }, */
+    },*/
     authStrategy: new LocalAuth()
 });
 
@@ -166,6 +169,14 @@ async function modelPrompt(message) {
     message.reply(response);
 }
 
+// ===== Utils =====
+function timestampToDateString(timestamp) {
+    const date = new Date(timestamp * 1000);
+    return date.toLocaleString();
+}
+
+//TODO: List groups with name:id
+//TODO: GN scrapping
 
 // ===== MAIN =====
 
@@ -216,7 +227,7 @@ client.on('message_create', async message => {
             }
         }
     } else {
-        if (message.fromMe) return; // Dont' reply to myself, prevents infinite loop. Disable for private testing.
+        if (message.fromMe) return; // Dont' reply to myself, prevents infinite loop. Disable for private testing. Maybe is better to use message_received event instead.
 
         if (debug) {
             console.log('-------', message.body);
@@ -275,7 +286,43 @@ client.on('message_create', async message => {
             message.reply(response);
         }
 
+        // Reaction troll
+        /* const author = await message.getContact();
+        if (author.id._serialized === privateNumber2) {
+            message.react('🏳️‍🌈');
+        } */
+
     }
 }
-)
+);
 
+// Message delete event. DON'T USE THIS ON UNAUTHORIZED GROUPS, you have been warned.
+client.on('message_revoke_everyone', async (after, before) => {
+    const chat = await before.getChat();
+    const chatId = chat.id._serialized;
+    const imgPath = path.join(__dirname, 'media', 'deleted.jpg');
+
+    // Send "Jesus saw what you deleted" meme. This probably is okey in most groups.
+    if (fs.existsSync(imgPath)) {
+        if (!chat.isGroup) {
+            await client.sendMessage(chatId, MessageMedia.fromFilePath(imgPath));
+        } else {
+            //TODO: Mention author in message or say "Author" deleted this media
+            await client.sendMessage(chatId, MessageMedia.fromFilePath(imgPath));
+        }
+    } else {
+        console.log('media file not found:', imgPath);
+    }
+    
+    //WARNING
+    if (after.from === group1) {
+        if (!before) {
+            console.log('No original message data available.');
+            return;
+        }
+        const author = await before.getContact();
+        if (!before.hasMedia) {
+            await client.sendMessage(chatId, '[' + timestampToDateString(before.timestamp) + '] ' + author.pushname + ' borró el mensaje: \n\n' + before.body);
+        } 
+    }
+});
