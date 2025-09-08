@@ -3,7 +3,6 @@ const readline = require('readline-sync');
 const qrcode = require('qrcode-terminal');
 const { OpenAI } = require('openai');
 const axios = require('axios');
-const fs = require('fs');
 require('dotenv').config()
 
 // Env and config
@@ -62,6 +61,11 @@ async function selectModel() {
 
 // Create a new client instance. With session management.
 const client = new Client({
+    //no-gui
+    /*puppeteer: {
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        executablePath: '/usr/bin/chromium',
+    },*/
     authStrategy: new LocalAuth()
 });
 
