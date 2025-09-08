@@ -247,7 +247,7 @@ client.on('message_create', async message => {
             for (let i = messages.length - 1; i >= 0; i--) {
                 const contact = await messages[i].getContact();
                 context.push({
-                    user: contact.name,
+                    user: contact.pushname,
                     message: messages[i].body
                 });
             }
@@ -278,8 +278,8 @@ client.on('message_create', async message => {
             for (let i = messages.length - 1; i >= 0; i--) {
                 const contact = await messages[i].getContact();
                 context.push({
-                    usuario: contact.name,
-                    mensaje: messages[i].body
+                    user: contact.pushname,
+                    message: messages[i].body
                 });
             }
             const response = await replyOpenAi(context);
