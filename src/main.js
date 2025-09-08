@@ -49,7 +49,7 @@ client.on('qr', qr => {
 client.initialize();
 
 
-// ===== Program functions =====
+// ===== Functions =====
 
 // List local models
 async function fetchLocalModels() {
@@ -234,14 +234,15 @@ client.on('message_create', async message => {
             const messages = await chat.fetchMessages({ limit: 10 });
             const context = [];
             for (let i = messages.length - 1; i >= 0; i--) {
+                const contact = await messages[i].getContact();
                 context.push({
-                    user: messages[i].getContact().name,
+                    user: contact.name,
                     message: messages[i].body
                 });
             }
 
             // Mention @
-            let mentions = message.getMentions();
+            let mentions =  await message.getMentions();
             for (let i = 0; i < mentions.length; i++) {
                 if (mentions[i].isMe) {
                     const response = await replyOpenAi(context);
@@ -264,8 +265,9 @@ client.on('message_create', async message => {
             const messages = await chat.fetchMessages({ limit: 10 });
             const context = [];
             for (let i = messages.length - 1; i >= 0; i--) {
+                const contact = await messages[i].getContact();
                 context.push({
-                    usuario: messages[i].getContact().name,
+                    usuario: contact.name,
                     mensaje: messages[i].body
                 });
             }
