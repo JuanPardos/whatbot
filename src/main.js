@@ -16,11 +16,11 @@ const privateNumber = process.env.PRIVATE_NUMBER;
 const privateNumber2 = process.env.PRIVATE_NUMBER2;
 const localBaseUrl = process.env.LOCAL_ENDPOINT;
 const defaultMode = process.env.DEFAULT_MODE;
+const debug = process.env.DEBUG === 'true';
 const group1 = process.env.GROUP1;
-const debug = process.env.DEBUG;
 
 const systemInstructions = "Responde en español";
-const systemInstructionsReplyAI = "Responde como si estuvieses en un conversación privada con una persona, debe ser natural y directa. Te adjunto los últimos 10 mensajes como contexto de la conversación, da prioridad al último mensaje, es el más reciente. No debes dar información, mencionar o referenciar los mensajes anteriores, responde de forma breve."
+const systemInstructionsReplyAI = "Responde al primer mensaje como si estuvieses en un conversación privada con una persona, debe ser natural y directa. Te adjunto los últimos 10 mensajes como contexto de la conversación, da prioridad al primero, es el más reciente. No debes dar información, mencionar o referenciar los mensajes anteriores, responde de forma breve."
 
 let operationMode = null;
 let modelName = null;
@@ -147,7 +147,8 @@ async function replyOpenAi(context) {
             instructions: systemInstructionsReplyAI,
             stream: false,
             max_output_tokens: 512,
-            input: conversation
+            input: conversation,
+            reasoning: { effort: "low" }
         });
 
         const text = response.output_text;
