@@ -5,67 +5,33 @@ const { OpenAI } = require('openai');
 const axios = require('axios');
 require('dotenv').config()
 
-// Env and config
+// ===== Env and config =====
+
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_KEY
 });
+const privateNumber = process.env.PRIVATE_NUMBER;
 const localBaseUrl = process.env.LOCAL_ENDPOINT;
-const myNumber = process.env.MY_NUMBER;
+const defaultMode = process.env.DEFAULT_MODE;
 const group1 = process.env.GROUP1;
+const debug = process.env.DEBUG;
 
 const systemInstructions = "Responde en español";
+const systemInstructionsReplyAI = "Responde como si estuvieses en un conversación privada con una persona, debe ser natural y directa. Te adjunto los últimos 10 mensajes como contexto de la conversación, da prioridad al último mensaje, es el más reciente. No debes dar información, mencionar o referenciar los mensajes anteriores, responde de forma breve."
 
-let selectedModel = null;
+let operationMode = null;
 let modelName = null;
 
-let debug = false;
 
-// Select operation mode and llm
-async function selectModel() {
-    while (!selectedModel) {
-        const opcion = readline.question('¿Which mode do you want to use? (1: OpenAI, 2: Local): ');
-        if (opcion === '1') {
-            selectedModel = 'openai';
-        } else if (opcion === '2') {
-            selectedModel = 'local';
-            try {
-                const res = await axios.get(localBaseUrl + '/v1/models');
-                let modelos = res.data.models || res.data;
-                if (!Array.isArray(modelos)) {
-                    if (typeof modelos === 'object' && modelos.data && Array.isArray(modelos.data)) {
-                        modelos = modelos.data;
-                    } else {
-                        modelos = Object.values(modelos);
-                    }
-                }
-                modelos.forEach((m, i) => {
-                    console.log(`${i + 1}: ${m.id || m.name || m}`);
-                });
-                let idx = -1;
-                while (idx < 0 || idx >= modelos.length) {
-                    idx = parseInt(readline.question('Choose a model: '), 10) - 1;
-                }
-                modelName = modelos[idx].id || modelos[idx].name || modelos[idx];
-                console.log('Selected model:', modelName);
-            } catch (err) {
-                console.error('Error fetching local models:', err.message);
-                process.exit(1);
-            }
-        }
-    }
-}
+// ===== Bot initialization =====
 
-(async () => {
-    await selectModel();
-})();
-
-// Create a new client instance. With session management.
+// Create a new client instance. With cache session management. Uncomment no-gui lines if needed
 const client = new Client({
-    //no-gui
-    /*puppeteer: {
+    // no-gui
+    /* puppeteer: {
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
         executablePath: '/usr/bin/chromium',
-    },*/
+    }, */
     authStrategy: new LocalAuth()
 });
 
@@ -76,23 +42,78 @@ client.once('ready', async () => {
 
 // When the client received QR-Code
 client.on('qr', qr => {
-    qrcode.generate(qr, {small: true});
-}); 
+    qrcode.generate(qr, { small: true });
+});
 
 // Start whatsapp client
 client.initialize();
 
-// Official OpenAI API
+
+// ===== Program functions =====
+
+// List local models
+async function fetchLocalModels() {
+    try {
+        const res = await axios.get(localBaseUrl + '/v1/models');
+        let modelos = res.data.models || res.data;
+        if (!Array.isArray(modelos)) {
+            if (typeof modelos === 'object' && modelos.data && Array.isArray(modelos.data)) {
+                modelos = modelos.data;
+            } else {
+                modelos = Object.values(modelos);
+            }
+        }
+        modelos.forEach((m, i) => {
+            console.log(`${i + 1}: ${m.id || m.name || m}`);
+        });
+        let idx = -1;
+        while (idx < 0 || idx >= modelos.length) {
+            idx = parseInt(readline.question('Choose a model: '), 10) - 1;
+        }
+        modelName = modelos[idx].id || modelos[idx].name || modelos[idx];
+    } catch (err) {
+        console.error('Error fetching local models, backend is online ¿?: ', err.message);
+        process.exit(1);
+    }
+}
+
+// Select operation mode and llm
+async function selectModel() {
+    if (defaultMode) {
+        if (defaultMode === 'openai') {
+            operationMode = 'openai';
+        } else if (defaultMode === 'local') {
+            operationMode = 'local';
+            await fetchLocalModels();
+        } else {
+            console.error('DEFAULT_MODE not valid, must be "openai" or "local"');
+            process.exit(1);
+        }
+        return;
+    }
+
+    while (!operationMode) {
+        const opcion = readline.question('¿Which mode do you want to use? (1: OpenAI, 2: Local): ');
+        if (opcion === '1') {
+            operationMode = 'openai';
+        } else if (opcion === '2') {
+            operationMode = 'local';
+            await fetchLocalModels();
+        }
+    }
+}
+
+// OpenAi request
 async function askOpenAi(prompt) {
     const response = await openai.responses.create({
         model: "gpt-5-mini-2025-08-07",
-        max_output_tokens: 4096,
-        input: prompt
+        max_output_tokens: 2048,
+        input: prompt,
     });
     return "🤖:  " + response.output_text;
 }
 
-// Local OpenAI API compliant
+// Local model request
 async function askLocal(prompt) {
     try {
         const response = await axios.post(localBaseUrl + '/v1/chat/completions', {
@@ -102,7 +123,7 @@ async function askLocal(prompt) {
                 { role: "user", content: prompt }
             ],
             temperature: 0.7,
-            max_tokens: 4096,
+            max_tokens: 2048,
             stream: false
         });
         return "🤖:  " + response.data.choices[0].message.content;
@@ -111,11 +132,33 @@ async function askLocal(prompt) {
     }
 }
 
+// Reply mode OpenAi.
+async function replyOpenAi(context) {
+    conversation = '';
+    try {
+        for (const msg of context) {
+            conversation += `${msg.user}: ${msg.message}\n`;
+        }
+        const response = await openai.responses.create({
+            model: "gpt-5-mini-2025-08-07",
+            instructions: systemInstructionsReplyAI,
+            stream: false,
+            max_output_tokens: 512,
+            input: conversation
+        });
+
+        const text = response.output_text;
+        return "🤖:  " + text.trim();
+    } catch (err) {
+        return 'Error generating response: ' + err.message;
+    }
+}
+
 // Handle model prompt
-async function modelPrompt(message){
+async function modelPrompt(message) {
     const prompt = message.body.slice(4).trim();
     let response;
-    if (selectedModel === 'openai') {
+    if (operationMode === 'openai') {
         response = await askOpenAi(prompt);
     } else {
         response = await askLocal(prompt);
@@ -123,9 +166,17 @@ async function modelPrompt(message){
     message.reply(response);
 }
 
+
+// ===== MAIN =====
+
+(async () => {
+    await selectModel();
+})();
+
+// Resets timer
 if (!global.slowdownUntil) global.slowdownUntil = 0;
 
-// Receive message
+// Message creation event
 client.on('message_create', async message => {
     let isAdmin = message.fromMe;
     const now = Date.now();
@@ -139,7 +190,7 @@ client.on('message_create', async message => {
             message.reply('No tienes permiso para ejecutar este comando.');
         }
     } else if (message.body === '!reset') {
-        if(isAdmin){
+        if (isAdmin) {
             global.slowdownUntil = 0;
             message.reply('✅ El modo limitado ha sido desactivado.');
         } else if (now >= global.slowdownUntil) {
@@ -169,7 +220,6 @@ client.on('message_create', async message => {
 
         if (debug) {
             console.log('-------', message.body);
-            console.log('message.broadcast: ', message.broadcast);
             console.log('message.getChat(): ', await message.getChat());
             console.log('message.from: ', message.from);
             console.log('message.getMentions(): ', await message.getMentions());
@@ -179,34 +229,48 @@ client.on('message_create', async message => {
             console.log('message', message);
         }
 
-        if ((await message.getChat()).id.user == group1) { 
-            let respuesta = '🤖: Estoy ocupado 😈';
+        if (message.from === group1) {
+            const chat = await message.getChat();
+            const messages = await chat.fetchMessages({ limit: 10 });
+            const context = [];
+            for (let i = messages.length - 1; i >= 0; i--) {
+                context.push({
+                    user: messages[i].getContact().name,
+                    message: messages[i].body
+                });
+            }
 
-            // Mention
+            // Mention @
             let mentions = message.getMentions();
             for (let i = 0; i < mentions.length; i++) {
                 if (mentions[i].isMe) {
-                    message.reply(respuesta);
+                    const response = await replyOpenAi(context);
+                    message.reply(response);
                 }
             }
-
             // Reply
             if (message.hasQuotedMsg) {
                 let quotedMessage = await message.getQuotedMessage();
                 if (quotedMessage.fromMe) {
-                    message.reply(respuesta);
+                    const response = await replyOpenAi(context);
+                    message.reply(response);
                 }
             }
         }
 
-        //PRUEBAS CHAT PRIVADO
-        if ((await message.getChat()).id.user == myNumber) {
-            if (message.hasQuotedMsg) {
-                let quotedMessage = await message.getQuotedMessage();
-                if (quotedMessage.fromMe) {
-                    message.reply('🤖:  Estoy durmiendo zZZZZZzzZ');
-                }
+        // Private chat testing
+        if (message.from === privateNumber) {
+            const chat = await message.getChat();
+            const messages = await chat.fetchMessages({ limit: 10 });
+            const context = [];
+            for (let i = messages.length - 1; i >= 0; i--) {
+                context.push({
+                    usuario: messages[i].getContact().name,
+                    mensaje: messages[i].body
+                });
             }
+            const response = await replyOpenAi(context);
+            message.reply(response);
         }
 
     }
