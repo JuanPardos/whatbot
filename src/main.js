@@ -12,6 +12,7 @@ require('dotenv').config()
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_KEY
 });
+const blacklistGroups = process.env.BLACKLIST ? process.env.BLACKLIST.split(',') : [];
 const privateNumber = process.env.PRIVATE_NUMBER;
 const privateNumber2 = process.env.PRIVATE_NUMBER2;
 const localBaseUrl = process.env.LOCAL_ENDPOINT;
@@ -31,16 +32,17 @@ let modelName = null;
 // Create a new client instance. With cache session management. Uncomment no-gui lines if needed
 const client = new Client({
     // no-gui
-    /*puppeteer: {
+    puppeteer: {
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
         executablePath: '/usr/bin/chromium',
-    },*/
+    },
     authStrategy: new LocalAuth()
 });
 
 // When the client is ready, run this code (only once)
 client.once('ready', async () => {
     console.log('Client is ready!');
+    // await listGroups();
 });
 
 // When the client received QR-Code
@@ -170,10 +172,42 @@ async function modelPrompt(message) {
     message.reply(response);
 }
 
+// Check if group is blacklisted. Id must be serialized
+function groupIsBlacklisted(chatId) {
+    return blacklistGroups.includes(chatId);
+}
+
 // ===== Utils =====
-function timestampToDateString(timestamp) {
-    const date = new Date(timestamp * 1000);
-    return date.toLocaleString();
+
+// Schedule a message
+function scheduleMessage(hour, minute, chatId) {
+    const now = new Date();
+    const target = new Date();
+    target.setHours(hour, minute, 0, 0);
+    const imgPath = path.join(__dirname, 'media', '1.jpg');
+
+    if (target <= now) {
+        target.setDate(target.getDate() + 1);
+    }
+
+    const msUntilSend = target - now;
+    console.log(`Message scheduled for ${target.toLocaleTimeString()}`);
+
+    const timer = setTimeout(async () => {
+        await client.sendMessage(chatId, MessageMedia.fromFilePath(imgPath));
+    }, msUntilSend);
+
+    timer.unref();
+}
+/* scheduleMessage(0, 15, group1); */
+
+// List groups
+async function listGroups(){
+    const chats = await client.getChats();
+    const groups = chats.filter(chat => chat.isGroup);
+    groups.forEach(group => {
+        console.log(`Group Name: ${group.name}, ID: ${group.id._serialized}`);
+    });
 }
 
 //TODO: List groups with name:id
@@ -240,8 +274,25 @@ client.on('message_create', async message => {
             console.log('message.getQuotedMessage(): ', await message.getQuotedMessage());
             console.log('message', message);
         }
+        
+        // Private chat testing
+        if (message.from === privateNumber) {
+            const chat = await message.getChat();
+            const messages = await chat.fetchMessages({ limit: 10 });
+            const context = [];
+            for (let i = messages.length - 1; i >= 0; i--) {
+                const contact = await messages[i].getContact();
+                context.push({
+                    user: contact.pushname,
+                    message: messages[i].body
+                });
+            }
+            const response = await replyOpenAi(context);
+            message.reply(response);
+        }
 
-        if (message.from === group1) {
+        //WARNING
+        /* if (message.from === group1) {
             const chat = await message.getChat();
             const messages = await chat.fetchMessages({ limit: 10 });
             const context = [];
@@ -269,33 +320,19 @@ client.on('message_create', async message => {
                     message.reply(response);
                 }
             }
-        }
-
-        // Private chat testing
-        if (message.from === privateNumber) {
-            const chat = await message.getChat();
-            const messages = await chat.fetchMessages({ limit: 10 });
-            const context = [];
-            for (let i = messages.length - 1; i >= 0; i--) {
-                const contact = await messages[i].getContact();
-                context.push({
-                    user: contact.pushname,
-                    message: messages[i].body
-                });
-            }
-            const response = await replyOpenAi(context);
-            message.reply(response);
-        }
-
-        // Reaction troll
-        /* const author = await message.getContact();
-        if (author.id._serialized === privateNumber2) {
-            message.react('🏳️‍🌈');
         } */
 
+        // Reaction troll
+        const author = await message.getContact();
+        if (author.id._serialized === privateNumber2) {
+            const randomNumber = Math.floor(Math.random() * 1000) + 1;
+            if (randomNumber === 69) {
+                message.react('🏳️‍🌈');
+            }
+        }
+
     }
-}
-);
+});
 
 // Message delete event. DON'T USE THIS ON UNAUTHORIZED GROUPS, you have been warned.
 client.on('message_revoke_everyone', async (after, before) => {
@@ -303,27 +340,31 @@ client.on('message_revoke_everyone', async (after, before) => {
     const chatId = chat.id._serialized;
     const imgPath = path.join(__dirname, 'media', 'deleted.jpg');
 
-    // Send "Jesus saw what you deleted" meme. This probably is okey in most groups.
-    if (fs.existsSync(imgPath)) {
-        if (!chat.isGroup) {
-            await client.sendMessage(chatId, MessageMedia.fromFilePath(imgPath));
+    if (!groupIsBlacklisted(chatId)) {
+        // Send "Jesus saw what you deleted" meme
+        if (fs.existsSync(imgPath)) {
+            if (!chat.isGroup) {
+                await client.sendMessage(chatId, MessageMedia.fromFilePath(imgPath));
+            } else {
+                //TODO: Mention author in message or say "Author" deleted this media
+                await client.sendMessage(chatId, MessageMedia.fromFilePath(imgPath));
+            }
         } else {
-            //TODO: Mention author in message or say "Author" deleted this media
-            await client.sendMessage(chatId, MessageMedia.fromFilePath(imgPath));
+            console.error('Media file not found:', imgPath);
         }
-    } else {
-        console.log('media file not found:', imgPath);
     }
     
-    //WARNING
-    if (after.from === group1) {
-        if (!before) {
-            console.log('No original message data available.');
-            return;
-        }
+    //Just in case before data isn't available
+    if (!before) {
+        const author = await after.getContact();
+        const chat = await after.getChat();
+        console.log(author.pushname + '[+' + author.number + ']@' + chat.name + ' deleted a message but no data is available.');
+    } else {
         const author = await before.getContact();
+        const chat = await before.getChat();
         if (!before.hasMedia) {
-            await client.sendMessage(chatId, '[' + timestampToDateString(before.timestamp) + '] ' + author.pushname + ' borró el mensaje: \n\n' + before.body);
-        } 
+            console.log(author.pushname + '[+' + author.number + ']@' + chat.name + ' deleted the message: ' + before.body);
+        }
     }
+
 });
