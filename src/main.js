@@ -13,11 +13,13 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_KEY
 });
 const blacklistGroups = process.env.BLACKLIST ? process.env.BLACKLIST.split(',') : [];
-const privateNumber = process.env.PRIVATE_NUMBER;
+const googleSearchApi = process.env.GOOGLE_SEARCH_API;
 const privateNumber2 = process.env.PRIVATE_NUMBER2;
+const privateNumber = process.env.PRIVATE_NUMBER;
 const localBaseUrl = process.env.LOCAL_ENDPOINT;
 const defaultMode = process.env.DEFAULT_MODE;
 const debug = process.env.DEBUG === 'true';
+const googleCx = process.env.GOOGLE_CX;
 const group1 = process.env.GROUP1;
 
 const systemInstructions = "Responde en español";
@@ -27,15 +29,15 @@ let operationMode = null;
 let modelName = null;
 
 
-// ===== Bot initialization =====
+// ===== BOT INIT =====
 
 // Create a new client instance. With cache session management. Uncomment no-gui lines if needed
 const client = new Client({
     // no-gui
-    puppeteer: {
+    /*puppeteer: {
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
         executablePath: '/usr/bin/chromium',
-    },
+    },*/
     authStrategy: new LocalAuth()
 });
 
@@ -54,7 +56,7 @@ client.on('qr', qr => {
 client.initialize();
 
 
-// ===== Functions =====
+// ===== CORE =====
 
 // List local models
 async function fetchLocalModels() {
@@ -113,7 +115,10 @@ async function askOpenAi(prompt) {
     const response = await openai.responses.create({
         model: "gpt-5-mini-2025-08-07",
         max_output_tokens: 2048,
-        input: prompt,
+        reasoning: { effort: "low" },
+        text: { verbosity: "low" },
+        stream: false,
+        input: prompt
     });
     return "🤖:  " + response.output_text;
 }
@@ -177,7 +182,7 @@ function groupIsBlacklisted(chatId) {
     return blacklistGroups.includes(chatId);
 }
 
-// ===== Utils =====
+// ===== UTILS =====
 
 // Schedule a message
 function scheduleMessage(hour, minute, chatId) {
@@ -199,7 +204,49 @@ function scheduleMessage(hour, minute, chatId) {
 
     timer.unref();
 }
-/* scheduleMessage(0, 15, group1); */
+scheduleMessage(0, 27, group1);
+
+// Retrieve and send 4 random images from Google Custom Search 
+async function googleImageSearch(query, chatId) {
+    const url = `https://customsearch.googleapis.com/customsearch/v1?cx=${googleCx}&num=10&q=${encodeURIComponent(query)}&searchType=image&key=${googleSearchApi}`;
+    try {
+        const res = await axios.get(url);
+        let items = res.data.items || [];
+        if (items.length === 0) {
+            await client.sendMessage(chatId, 'No se encontraron imágenes.');
+            return;
+        }
+        items = items.sort(() => 0.5 - Math.random()).slice(0, 4);
+
+        let sent = 0;
+        for (let i = 0; i < items.length; i++) {
+            const imageUrl = items[i].link;
+            let mimeType = items[i].mime || 'image/jpeg';
+            let ext = 'jpg';
+            if (mimeType === 'image/png') ext = 'png';
+            else if (mimeType === 'image/webp') ext = 'webp';
+            else if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') ext = 'jpg';
+
+            try {
+                const imgRes = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 7000 });
+                const media = new MessageMedia(
+                    mimeType,
+                    Buffer.from(imgRes.data, 'binary').toString('base64'),
+                    `image${i + 1}.${ext}`
+                );
+                await client.sendMessage(chatId, media);
+                sent++;
+            } catch (imgErr) {
+                //console.log(`No se pudo descargar la imagen ${i + 1}: ${imageUrl} - ${imgErr.message}`);
+            }
+        }
+        if (sent === 0) {
+            await client.sendMessage(chatId, 'No se pudieron enviar imágenes. Intenta con otra búsqueda.');
+        }
+    } catch (error) {
+        console.log('Error en la búsqueda de imágenes: ', error.message);
+    }
+}
 
 // List groups
 async function listGroups(){
@@ -210,7 +257,6 @@ async function listGroups(){
     });
 }
 
-//TODO: List groups with name:id
 //TODO: GN scrapping
 
 // ===== MAIN =====
@@ -224,14 +270,16 @@ if (!global.slowdownUntil) global.slowdownUntil = 0;
 
 // Message creation event
 client.on('message_create', async message => {
+    const chat = await message.getChat();
+    const chatId = chat.id._serialized;
     let isAdmin = message.fromMe;
     const now = Date.now();
     if (message.body === '!ping') {
-        client.sendMessage(message.from, 'pong');
+        client.sendMessage(chatId, 'pong');
     } else if (message.body === '!slowdown') {
         if (isAdmin) {
-            global.slowdownUntil = now + 5 * 60 * 1000;
-            message.reply('ℹ️ Bloqueadas las peticiones de los demás usuarios durante 5 minutos.');
+            global.slowdownUntil = now + 10 * 60 * 1000;
+            message.reply('ℹ️ Bloqueadas las peticiones de los demás usuarios durante 10 minutos.');
         } else if (now >= global.slowdownUntil) {
             message.reply('No tienes permiso para ejecutar este comando.');
         }
@@ -254,12 +302,21 @@ client.on('message_create', async message => {
         if (isAdmin) {
             await modelPrompt(message);
         } else {
-            if (now - lastTime > 30000) {
+            if (now - lastTime > 60000) {
                 global.lastAiRequest[userId] = now;
                 await modelPrompt(message);
             } else {
-                message.reply('⏳ Espera 30 segundos antes de volver a preguntar. También puedes pagar en Ethereum para reducir el tiempo de espera.');
+                message.reply('⏳ Espera 1 minuto antes de volver a preguntar. También puedes pagar en Ethereum para reducir el tiempo de espera.');
             }
+        }
+    } else if (message.body.startsWith('!image')) {
+        if (isAdmin) {
+            const query = message.body.slice(6).trim();
+            if (!query) {
+                message.reply('Debes escribir una búsqueda. Ejemplo: !image gatos');
+                return;
+            }
+            await googleImageSearch(query, chatId);
         }
     } else {
         if (message.fromMe) return; // Dont' reply to myself, prevents infinite loop. Disable for private testing. Maybe is better to use message_received event instead.
@@ -340,7 +397,7 @@ client.on('message_revoke_everyone', async (after, before) => {
     const chatId = chat.id._serialized;
     const imgPath = path.join(__dirname, 'media', 'deleted.jpg');
 
-    if (!groupIsBlacklisted(chatId)) {
+    if (!groupIsBlacklisted(chatId) && !before.fromMe) {
         // Send "Jesus saw what you deleted" meme
         if (fs.existsSync(imgPath)) {
             if (!chat.isGroup) {
