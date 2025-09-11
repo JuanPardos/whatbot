@@ -22,7 +22,7 @@ const debug = process.env.DEBUG === 'true';
 const googleCx = process.env.GOOGLE_CX;
 const group1 = process.env.GROUP1;
 
-const systemInstructions = "Responde en español";
+const systemInstructions = "Eres un asistente en un grupo de chat, no tienes acceso a la conversación ni a los mensajes anteriores por lo tanto responde de forma breve y concisa. Tampoco es posible iniciar conversaciones, limitate a pregunta -> respuesta. No hagas preguntas.";
 const systemInstructionsReplyAI = "Responde al primer mensaje como si estuvieses en un conversación privada con una persona, debe ser natural y directa. Te adjunto los últimos 10 mensajes como contexto de la conversación, da prioridad al primero, es el más reciente. No debes dar información, mencionar o referenciar los mensajes anteriores, responde de forma breve."
 
 let operationMode = null;
@@ -115,8 +115,17 @@ async function askOpenAi(prompt) {
     const response = await openai.responses.create({
         model: "gpt-5-mini-2025-08-07",
         max_output_tokens: 2048,
+        instructions: systemInstructions,
         reasoning: { effort: "low" },
-        text: { verbosity: "low" },
+        tools: [
+            { type: "web_search", 
+                search_context_size : "low", 
+                user_location: {
+                    type: "approximate",
+                    country: "ES"
+                }
+            }
+        ],
         stream: false,
         input: prompt
     });
@@ -204,7 +213,7 @@ function scheduleMessage(hour, minute, chatId) {
 
     timer.unref();
 }
-scheduleMessage(0, 27, group1);
+//scheduleMessage(0, 27, group1);
 
 // Retrieve and send 4 random images from Google Custom Search 
 async function googleImageSearch(query, chatId) {
